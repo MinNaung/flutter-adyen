@@ -16,12 +16,15 @@ public class SwiftFlutterAdyenPlugin: NSObject, FlutterPlugin {
     
     var merchantAccount: String = ""
     var pubKey: String = ""
-    var amount: Double = 0.0
+    var amount: String = ""
     var currency: String = ""
+    var countryCode: String = ""
+    var shopperLocaleString: String = ""
     var returnUrl: String?
     var shopperReference: String = ""
     var reference: String = ""
     var allow3DS2: Bool = false
+    var executeThreeD: Bool = false
     var testEnvironment: Bool = false
     var shopperInteraction:String = ""
     var storePaymentMethod: Bool = false
@@ -48,15 +51,38 @@ public class SwiftFlutterAdyenPlugin: NSObject, FlutterPlugin {
         
         merchantAccount = arguments?["merchantAccount"] as! String
         pubKey = arguments?["pubKey"] as! String
-        amount = arguments?["amount"] as! Double
+        amount = arguments?["amount"] as! String
         currency = arguments?["currency"] as! String
-        returnUrl = arguments?["iosReturnUrl"] as? String
+
+        if  let country = arguments?["countryCode"],
+            let cc = country as? String {
+            countryCode = cc
+        }
+        if  let locale = arguments?["shopperLocale"],
+            let loc = locale as? String {
+            shopperLocaleString = loc
+        }
+        guard let return_url = arguments?["iosReturnUrl"],
+        let url = return_url as? String else { return }
+        returnUrl = url
+        
         shopperReference = arguments?["shopperReference"] as! String
-        shopperInteraction = arguments?["shopperInteraction"] as! String
-        storePaymentMethod = arguments?["storePaymentMethod"] as! Bool
-        recurringProcessingModel = arguments?["recurringProcessingModel"] as! String
+        
+        if  let shopper_interaction = arguments?["shopperInteraction"],
+            let interaction = shopper_interaction as? String {
+            shopperInteraction = interaction
+        }
+        if  let recurringModel = arguments?["recurringProcessingModel"],
+            let recurring = recurringModel as? String {
+            recurringProcessingModel = recurring
+        }
+        if  let storePayment = arguments?["storePaymentMethod"],
+            let store = storePayment as? Bool {
+            storePaymentMethod = store
+        }
         reference = arguments?["reference"] as! String
         allow3DS2 = arguments?["allow3DS2"] as! Bool
+        executeThreeD = arguments?["executeThreeD"] as! Bool
         testEnvironment = arguments?["testEnvironment"] as? Bool ?? false
         
         guard let paymentData = paymentMethodsPayload?.data(using: .utf8),
@@ -66,8 +92,10 @@ public class SwiftFlutterAdyenPlugin: NSObject, FlutterPlugin {
         
         let configuration = DropInComponent.PaymentMethodsConfiguration()
         configuration.card.publicKey = pubKey
+        
         dropInComponent = DropInComponent(paymentMethods: paymentMethods, paymentMethodsConfiguration: configuration)
         dropInComponent?.delegate = self
+        dropInComponent?.payment = Payment(amount: Payment.Amount(value: Int(amount)!, currencyCode: currency))
         dropInComponent?.environment = testEnvironment ? .test : .live
         
         //        topController = UIApplication.shared.keyWindow?.rootViewController
@@ -99,18 +127,23 @@ public class SwiftFlutterAdyenPlugin: NSObject, FlutterPlugin {
     }
 }
 
+//MARK: - DropInComponentDelegate
 extension SwiftFlutterAdyenPlugin: DropInComponentDelegate {
     // back from the ui, for payment call
     public func didSubmit(_ data: PaymentComponentData, from component: DropInComponent) {
         //guard let url = URL(string: urlPayments) else { return }
         
+        let paymentMethod = try? data.paymentMethod.encodable.toDictionary()
+
         // prepare json data
         let json: [String: Any] = [
-           "paymentMethod": data.paymentMethod.dictionaryRepresentation,
+            "paymentMethod": paymentMethod!,
            "amount": [
             "currency": currency,
             "value": amount
            ],
+           "countryCode":countryCode,
+           "shopperLocale":shopperLocaleString,
            "channel": "iOS",
            "merchantAccount": merchantAccount,
            "reference": reference,
@@ -120,7 +153,8 @@ extension SwiftFlutterAdyenPlugin: DropInComponentDelegate {
            "shopperInteraction": shopperInteraction,
            "recurringProcessingModel": recurringProcessingModel,
            "additionalData": [
-               "allow3DS2": allow3DS2
+                "allow3DS2": allow3DS2,
+                "executeThreeD": executeThreeD
            ]
         ]
 
@@ -135,23 +169,23 @@ extension SwiftFlutterAdyenPlugin: DropInComponentDelegate {
     
     // called when details are needed (3DSecure?)
     public func didProvide(_ data: ActionComponentData, from component: DropInComponent) {
-        /* TODO
-        guard let url = URL(string: urlPaymentsDetails) else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = httpMethod
-        if (authToken != nil) {
-            request.setValue("\(authToken!)", forHTTPHeaderField: "Authorization")
-        }
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        let json: [String: Any] = ["details": data.details.dictionaryRepresentation,"paymentData": data.paymentData]
-        let jsonData = try? JSONSerialization.data(withJSONObject: json)
-        request.httpBody = jsonData
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if(data != nil) {
-                self.finish(data: data!, component: component)
+        let details = try? data.details.encodable.toDictionary()
+        let json: [String: Any] = ["details": details!,"paymentData": data.paymentData]
+        let jsonString:String = jsonToString(json: json as AnyObject)!
+
+        let controller : FlutterViewController = self.topController as! FlutterViewController
+        let channel = FlutterMethodChannel(name: "flutter_adyen", binaryMessenger: controller.binaryMessenger)
+        channel.invokeMethod("detailsRequest", arguments: jsonString) { (result:Any?) in
+            if(result != nil){
+                do{
+                    let dict = self.stringToDictionary(text: result as! String)
+                    let data =  try JSONSerialization.data(withJSONObject: dict!, options: JSONSerialization.WritingOptions.prettyPrinted)
+                    self.finish(data: data, component: component)
+                } catch let jsonError {
+                    print(jsonError)
+                }
             }
-        }.resume()*/
+        }
     }
     
     public func didFail(with error: Error, from component: DropInComponent) {
@@ -170,15 +204,15 @@ extension SwiftFlutterAdyenPlugin: DropInComponentDelegate {
     
     private func finish(data: Data, component: DropInComponent) {
         let paymentResponseJson = try? JSONSerialization.jsonObject(with: data, options: .allowFragments) as? Dictionary<String,Any>
-        if let paymentResponseJson = paymentResponseJson as? Dictionary<String,Any> {
-            let action = paymentResponseJson["action"]
+        if (paymentResponseJson != nil) {
+            let action = paymentResponseJson!.keys.contains("action") ? paymentResponseJson?["action"] : nil
             if(action != nil) {
                 let act = try? JSONDecoder().decode(Action.self, from: JSONSerialization.data(withJSONObject: action!))
                 if(act != nil){
                     component.handle(act!)
                 }
             } else {
-                let resultCode = paymentResponseJson["resultCode"] as? String
+                let resultCode = paymentResponseJson?["resultCode"] as? String
                 let success = resultCode == "Authorised" || resultCode == "Received" || resultCode == "Pending"
                 component.stopLoading()
                 if (success) {
@@ -192,6 +226,7 @@ extension SwiftFlutterAdyenPlugin: DropInComponentDelegate {
             }
         }
     }
+
 }
 
 extension UIViewController: PaymentComponentDelegate {
@@ -216,4 +251,45 @@ extension UIViewController: ActionComponentDelegate {
         //performPayment(with: public  }
     }
     
+}
+
+//MARK: - Json Utils
+extension SwiftFlutterAdyenPlugin {
+    func jsonToString(json: AnyObject) -> String?{
+        do {
+            let data1 =  try JSONSerialization.data(withJSONObject: json, options: JSONSerialization.WritingOptions.prettyPrinted)
+            let convertedString = String(data: data1, encoding: String.Encoding.utf8)
+            print(convertedString ?? "defaultvalue")
+            return convertedString
+        } catch let myJSONError {
+            print(myJSONError)
+        }
+        return nil
+    }
+    
+    func stringToDictionary(text: String) -> [String: Any]? {
+        if let data = text.data(using: .utf8) {
+            do {
+                return try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
+            } catch {
+                print(error.localizedDescription)
+            }
+        }
+        return nil
+    }
+}
+
+//MARK: - Extension
+extension Encodable {
+    
+    /// Converting object to postable dictionary
+    func toDictionary(_ encoder: JSONEncoder = JSONEncoder()) throws -> [String: String] {
+        let data = try encoder.encode(self)
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard let json = object as? [String: String] else {
+            let context = DecodingError.Context(codingPath: [], debugDescription: "Deserialized object is not a dictionary")
+            throw DecodingError.typeMismatch(type(of: object), context)
+        }
+        return json
+    }
 }

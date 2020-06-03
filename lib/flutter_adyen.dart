@@ -6,22 +6,50 @@ import 'package:flutter/widgets.dart';
 
 import 'dart:io' show Platform;
 
+typedef Future<Map<String, dynamic>> OnPaymentDetilsRequested(String params);
+
 class FlutterAdyen {
   static const MethodChannel _channel = const MethodChannel('flutter_adyen');
+
+  static void registerCallBackHandler(){
+    _channel.setMethodCallHandler(_handleMethod);
+  }
+
+  static OnPaymentDetilsRequested onPaymentDetailsRequest;
+  static void registerPaymentDetailsCallBack(OnPaymentDetilsRequested onPaymentDetailsRequest){
+      FlutterAdyen.onPaymentDetailsRequest = onPaymentDetailsRequest;
+  }
+
+  static Future<dynamic> _handleMethod(MethodCall call) async {
+    switch (call.method) {
+      case "message":
+        debugPrint(call.arguments);
+        await Future.delayed(Duration(seconds: 3));
+        return new Future.value("Hello From Flutter!");
+      case "detailsRequest":
+        debugPrint(call.arguments);
+        Map<String, dynamic> detailsResponse = await FlutterAdyen.onPaymentDetailsRequest(call.arguments);
+        var payload = json.encode(detailsResponse);
+        return payload;
+    }
+  }
 
   static Future<String> choosePaymentMethod({
     @required String paymentMethodsPayload,
     String iosReturnUrl,
     @required String merchantAccount,
     @required String publicKey,
-    @required double amount,
+    @required String amount,
     @required String currency,
+    String countryCode,
+    String shopperLocale,
     @required String reference,
-    @required String shopperReference,
-    @required ShopperInteraction shopperInteraction,
-    @required RecurringProcessingModels recurringProcessingModel,
-    @required bool storePaymentMethod,
+    @required String shopperReference,   
+    ShopperInteraction shopperInteraction,
+    RecurringProcessingModels recurringProcessingModel,
+    bool storePaymentMethod,
     @required bool allow3DS2,
+    @required bool executeThreeD,
     @required bool testEnvironment,
   }) async
   {
@@ -35,12 +63,15 @@ class FlutterAdyen {
     args.putIfAbsent('pubKey', () => publicKey);
     args.putIfAbsent('amount', () => amount);
     args.putIfAbsent('currency', () => currency);
+    args.putIfAbsent('countryCode', () => countryCode);
+    args.putIfAbsent('shopperLocale', () => shopperLocale);
     args.putIfAbsent('reference', () => reference);
     args.putIfAbsent('shopperReference', () => shopperReference);
     args.putIfAbsent('shopperInteraction', () => _enumToString(shopperInteraction));
     args.putIfAbsent('storePaymentMethod', () => storePaymentMethod);
     args.putIfAbsent('recurringProcessingModel', () => _enumToString(recurringProcessingModel));
     args.putIfAbsent('allow3DS2', () => allow3DS2);
+    args.putIfAbsent('executeThreeD', () => executeThreeD);
     args.putIfAbsent('iosReturnUrl', () => iosReturnUrl);
 
     args.putIfAbsent('testEnvironment', () => testEnvironment);

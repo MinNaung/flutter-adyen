@@ -1,11 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_adyen/flutter_adyen.dart';
 import 'package:flutter_speed_dial/flutter_speed_dial.dart';
-
+import 'api.dart' as api;
 import 'mock_data.dart';
 
 void main() => runApp(MyApp());
@@ -28,6 +27,14 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> initPlatformState() async {
     if (!mounted) return;
+
+    FlutterAdyen.registerCallBackHandler();
+
+    //Step (4) (Optional) POST /payments/details request
+    FlutterAdyen.registerPaymentDetailsCallBack((requestBody) async {
+      var response = await api.detailsRequest(requestBody);
+      return jsonDecode(response.body);
+    });
 
     setState(() {
       _debugInfo = dropInResponse;
@@ -69,43 +76,50 @@ class _MyAppState extends State<MyApp> {
                 backgroundColor: Colors.blue,
                 label: 'try flow',
                 labelStyle: TextStyle(fontSize: 18.0),
-                onTap: tryFlow
-            ),
+                onTap: tryFlow),
           ],
         ),
         appBar: AppBar(
           title: const Text('Flutter Adyen'),
         ),
         body: Center(
-          child: Text('Running on: $_debugInfo\n'),
+          child:
+              SingleChildScrollView(child: Text('Result : $_debugInfo\n')),
         ),
       ),
     );
   }
 
   void tryFlow() async {
-    var scheme = 'your_app://';
-    var ref = "5933644c-ab32-49f7-a9cd-fd2dc87fab2e";
-    var paymentMethodsPayload = json.encode(examplePaymentMethods);
-    var userID = "abcdef";
+    var scheme = 'myflutteradyen://';//URL to where the shopper should be taken back to after a redirection. This URL can have a maximum of 1024 characters. For more information on setting a custom URL scheme for your app, read the Apple Developer documentation. https://developer.apple.com/documentation/uikit/inter-process_communication/allowing_apps_and_websites_to_link_to_your_content/defining_a_custom_url_scheme_for_your_app
+    var ref = 'flutter-test_${DateTime.now().millisecondsSinceEpoch}';
 
+    // Step (1) POST /paymentMethods request
+    var paymentMethodResponse =
+        await api.getPaymentMethods(jsonEncode(paymentMethodsRequestJson));
+    var paymentMethodsPayload = paymentMethodResponse.body;
+
+    // Step (2) Start Drop-in
     try {
       dropInResponse = await FlutterAdyen.choosePaymentMethod(
           paymentMethodsPayload: paymentMethodsPayload,
-          merchantAccount: merchantAccount,
-          publicKey: pubKey,
-          amount: 12.0,
-          currency: 'EUR',
+          merchantAccount: MERCHANT_ACCOUNT,
+          publicKey: PUBLIC_KEY,
+          amount: amount_value,
+          currency: amount_currency,
+          countryCode: countryCode,
+          shopperLocale: shopperLocale,
           iosReturnUrl: scheme,
           reference: ref,
-          shopperReference: userID,
+          shopperReference: SHOPPER_REFERENCE,          
           allow3DS2: true,
+          executeThreeD: true,
           testEnvironment: true,
           storePaymentMethod: true,
-          shopperInteraction: ShopperInteraction.ContAuth,
+          shopperInteraction: ShopperInteraction.Ecommerce,
           recurringProcessingModel: RecurringProcessingModels.CardOnFile
-      );
-    } on PlatformException catch (e){
+          );
+    } on PlatformException catch (e) {
       dropInResponse = 'PlatformException. ${e.message}';
     } on Exception {
       dropInResponse = 'Exception.';
@@ -115,41 +129,46 @@ class _MyAppState extends State<MyApp> {
       _debugInfo = dropInResponse;
     });
 
-    var res = await FlutterAdyen.sendResponse(
+    // Step (3) POST /payments request
+    var paymentsResponse = await api.paymentsRequest(dropInResponse);
+    var res;
+    try {
+      res = await FlutterAdyen.sendResponse(jsonDecode(paymentsResponse.body)
+          // {
+          //   "pspReference":"883577097894825J",
+          //   "resultCode":"Refused",
+          //   "merchantReference":"e13e71f7-c9b7-406a-a800-18fce8204173"
+          // }
+
+          /*
         {
-          "pspReference":"883577097894825J",
-          "resultCode":"Authorised",
-          "merchantReference":"e13e71f7-c9b7-406a-a800-18fce8204173"
-        }
-      /*{
-              "resultCode": "RedirectShopper",
-              "action": {
-                "data": {
-                  "MD": "OEVudmZVMUlkWjd0MDNwUWs2bmhSdz09...",
-                  "PaReq": "eNpVUttygjAQ/RXbDyAXBYRZ00HpTH3wUosPfe...",
-                  "TermUrl": "adyencheckout://your.package.name"
-                },
-                "method": "POST",
-                "paymentData": "Ab02b4c0!BQABAgA4e3wGkhVah4CJL19qdegdmm9E...",
-                "paymentMethodType": "scheme",
-                "type": "redirect",
-                "url": "https://test.adyen.com/hpp/3d/validate.shtml"
-              },
-              "details": [
-                {
-                  "key": "MD",
-                  "type": "text"
-                },
-                {
-                  "key": "PaRes",
-                  "type": "text"
-                }
-              ],
-            }*/
-    );
+          "resultCode": "RedirectShopper",
+          "action": {
+            "data": {
+              "MD": "OEVudmZVMUlkWjd0MDNwUWs2bmhSdz09...",
+              "PaReq": "eNpVUttygjAQ/RXbDyAXBYRZ00HpTH3wUosPfe...",
+              "TermUrl": "adyencheckout://your.package.name"
+            },
+            "method": "POST",
+            "paymentData": "Ab02b4c0!BQABAgA4e3wGkhVah4CJL19qdegdmm9E...",
+            "paymentMethodType": "scheme",
+            "type": "redirect",
+            "url": "https://test.adyen.com/hpp/3d/validate.shtml"
+          },
+          "details": [
+            {"key": "MD", "type": "text"},
+            {"key": "PaRes", "type": "text"}
+          ],
+        }*/
+          );
+    } on PlatformException catch (e) {
+      res = 'PlatformException. ${e.message}';
+    } on Exception {
+      res = 'Exception.';
+    }
 
     setState(() {
-      _debugInfo = dropInResponse + "||||" + res;
+      _debugInfo = res + "||||" + dropInResponse;
     });
   }
 }
